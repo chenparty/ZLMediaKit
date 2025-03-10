@@ -1,0 +1,87 @@
+# 使用 Debian Slim 作为构建阶段的基础镜像
+FROM debian:12-slim AS build
+# 设置编译模式 Debug or Release
+ARG MODEL=Debug
+
+# 安装apt镜像源
+RUN mv /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak
+RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main contrib non-free" > /etc/apt/sources.list.d/aliyun.list && \
+    echo "deb http://mirrors.aliyun.com/debian-security/ bookworm-security main contrib non-free" >> /etc/apt/sources.list.d/aliyun.list && \
+    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free" >> /etc/apt/sources.list.d/aliyun.list
+
+# 安装必要的构建工具和依赖
+RUN apt-get update && \
+    DEBIAN_FRONTEND="noninteractive" \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    curl \
+    ca-certificates \
+    g++ \
+    gdb \
+    libssl-dev && \
+    apt-get autoremove -y && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# 创建并复制源代码
+RUN mkdir -p /opt/media
+COPY . /opt/media/ZLMediaKit
+
+# srtp init for webrtc
+ARG SRTP_VERSION=2.6.0
+WORKDIR /opt/media/ZLMediaKit/3rdpart
+RUN curl -L https://github.com/cisco/libsrtp/archive/v${SRTP_VERSION}.tar.gz -o libsrtp-${SRTP_VERSION}.tar.gz && \
+    tar xfv libsrtp-${SRTP_VERSION}.tar.gz && \
+        mv libsrtp-${SRTP_VERSION} libsrtp && \
+            cd libsrtp && ./configure --enable-openssl && make -j $(nproc) && make install
+
+# 构建项目
+WORKDIR /opt/media/ZLMediaKit
+RUN mkdir -p build release/linux/${MODEL}/
+WORKDIR /opt/media/ZLMediaKit/build
+RUN cmake -DCMAKE_BUILD_TYPE=${MODEL} -DENABLE_WEBRTC=false -DENABLE_SRT=false  -DENABLE_FFMPEG=true -DENABLE_TESTS=false -DDISABLE_REPORT=true .. && \
+    make -j $(nproc)
+
+### 使用 Debian Slim 作为最终镜像
+FROM debian:12-slim AS final
+# 设置编译模式 Debug or Release
+ARG MODEL=Debug
+
+# 安装apt镜像源
+RUN mv /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/debian.sources.bak
+RUN echo "deb http://mirrors.aliyun.com/debian/ bookworm main contrib non-free" > /etc/apt/sources.list.d/aliyun.list && \
+    echo "deb http://mirrors.aliyun.com/debian-security/ bookworm-security main contrib non-free" >> /etc/apt/sources.list.d/aliyun.list && \
+    echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free" >> /etc/apt/sources.list.d/aliyun.list
+
+# 安装运行时依赖，避免多余的工具
+RUN apt-get update && \
+    DEBIAN_FRONTEND="noninteractive" \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libssl-dev && \
+    apt-get autoremove -y && \
+    apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# 设置时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+    echo $TZ > /etc/timezone
+
+
+# 设置工作目录并复制构建好的二进制文件
+RUN mkdir -p /opt/media/bin/www
+WORKDIR /opt/media/bin/
+COPY --from=build /opt/media/ZLMediaKit/release/linux/${MODEL}/MediaServer /opt/media/ZLMediaKit/default.pem /opt/media/bin/
+COPY --from=build /opt/media/ZLMediaKit/release/linux/${MODEL}/config.ini /opt/media/conf/
+COPY --from=build /opt/media/ZLMediaKit/www/ /opt/media/bin/www/
+# 拷贝针对快照功能的ffmpeg
+COPY --from=build /opt/media/ZLMediaKit/ffmpeg /usr/bin/ffmpeg
+RUN chmod +x /usr/bin/ffmpeg
+
+# 设置 PATH 环境变量
+ENV PATH /opt/media/bin:$PATH
+
+# 默认启动命令
+CMD ["./MediaServer", "-s", "default.pem", "-c", "../conf/config.ini", "-l", "0"]
