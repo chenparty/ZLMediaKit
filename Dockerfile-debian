@@ -1,5 +1,5 @@
 # 使用 Debian Slim 作为构建阶段的基础镜像
-FROM debian:12-slim AS build
+FROM debian:13-slim AS build
 # 设置编译模式 Debug or Release
 ARG MODEL=Debug
 
@@ -29,7 +29,7 @@ RUN mkdir -p /opt/media
 COPY . /opt/media/ZLMediaKit
 
 # srtp init for webrtc
-ARG SRTP_VERSION=2.6.0
+ARG SRTP_VERSION=2.7.0
 WORKDIR /opt/media/ZLMediaKit/3rdpart
 RUN curl -L https://github.com/cisco/libsrtp/archive/v${SRTP_VERSION}.tar.gz -o libsrtp-${SRTP_VERSION}.tar.gz && \
     tar xfv libsrtp-${SRTP_VERSION}.tar.gz && \
